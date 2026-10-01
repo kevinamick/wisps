@@ -15,6 +15,8 @@ import * as google from './connectors/google.js';
 import * as play from './connectors/play.js';
 import * as amazon from './connectors/amazon.js';
 import * as signin from './browser-session.js';
+import * as bubbles from './bubbles.js';
+import * as peers from './peers.js';
 
 const PORT = Number(process.env.PORT || 4777);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -38,7 +40,7 @@ const readBody = (req) => new Promise((resolve, reject) => {
   req.on('data', (c) => { s += c; if (s.length > 2e6) reject(new Error('too large')); });
   req.on('end', () => { try { resolve(s ? JSON.parse(s) : {}); } catch (e) { reject(e); } });
 });
-const fullSnapshot = () => ({ ...snapshot(), live: engine.live, telegram: telegram.tg, connectors: connectors.publicList(), amazonWatches: state.amazonWatches || [], googleClient: !!connectors.secrets()['google:clientId'], dataDir: DATA_DIR });
+const fullSnapshot = () => ({ ...snapshot(), live: engine.live, telegram: telegram.tg, connectors: connectors.publicList(), amazonWatches: state.amazonWatches || [], googleClient: !!connectors.secrets()['google:clientId'], dataDir: DATA_DIR, ...peers.publicView() });
 
 // Local-only app that can run commands: refuse other hosts (DNS rebinding) and cross-site writes.
 // Extra host names Wisps may be reached by, e.g. its Tailscale name (ALLOWED_HOSTS=wisps-vm.tailnet.ts.net).
@@ -69,6 +71,7 @@ function applyWispFields(wisp, b) {
   if (Array.isArray(b.grants)) wisp.grants = b.grants.map((g) => clamp(g, 500).trim()).filter(Boolean).map((g) => g.replace(/^~/, os.homedir()));
   if (b.heartbeat !== undefined) wisp.heartbeat = { ...wisp.heartbeat, enabled: !!b.heartbeat.enabled, everyMin: Math.max(15, Number(b.heartbeat.everyMin) || 120) };
   if (b.paused !== undefined) wisp.paused = !!b.paused;
+  if (b.capture !== undefined) wisp.capture = !!b.capture;
   if (b.connectors && typeof b.connectors === 'object') wisp.connectors = Object.fromEntries(Object.entries(b.connectors).filter(([k]) => connectors.get(k)).map(([k, v]) => [k, !!v]));
 }
 
@@ -133,6 +136,18 @@ route('GET', '/api/wisps/:wispId/memory', (b, { wispId }) => ({ text: readMemory
 route('PUT', '/api/wisps/:wispId/memory', (b, { wispId }) => { writeMemory(wispId, clamp(b.text, 50000)); return { ok: true }; });
 route('POST', '/api/wisps/:wispId/memory/tidy', async (b, { wispId }) => { await engine.consolidate(wispId); return { text: readMemory(wispId) }; });
 
+// ---- memory bubbles -----------------------------------------------------------
+route('GET', '/api/wisps/:wispId/bubbles', (b, { wispId }) => { if (!getWisp(wispId)) throw404(); return bubbles.load(wispId); });
+route('POST', '/api/wisps/:wispId/bubbles', (b, { wispId }) => {
+  if (!getWisp(wispId)) throw404();
+  const r = bubbles.addFact(wispId, { topic: clamp(b.topic, 80), kind: b.kind, fact: clamp(b.fact, 500), scope: 'owner' });
+  if (!r) { const e = new Error('Give it a title and a first note.'); e.status = 400; throw e; }
+  return r;
+});
+route('PATCH', '/api/wisps/:wispId/bubbles/:bid', (b, { wispId, bid }) => bubbles.update(wispId, bid, b) || throw404());
+route('DELETE', '/api/wisps/:wispId/bubbles/:bid', (b, { wispId, bid }) => { bubbles.remove(wispId, bid); return { ok: true }; });
+route('POST', '/api/wisps/:wispId/bubbles/:bid/merge', (b, { wispId, bid }) => bubbles.merge(wispId, bid, b.from) || throw404());
+
 route('GET', '/api/wisps/:wispId/files', (b, { wispId }, url) => listFiles(wispId, url.searchParams.get('path') || ''));
 
 route('POST', '/api/wisps/:wispId/tasks', (b, { wispId }) => {
@@ -188,6 +203,31 @@ route('PUT', '/api/telegram/config', (b) => {
   return { ok: true };
 });
 route('POST', '/api/telegram/groups/connect', (b) => { const g = telegram.tg.pendingGroups.find((x) => x.chatId === b.chatId); if (!g) throw404(); telegram.connectGroup({ ...g, wispId: b.wispId }); return { ok: true }; });
+
+// ---- friends' Wisps ----------------------------------------------------------
+route('PUT', '/api/peer/settings', (b) => {
+  const s = peers.settings();
+  if (b.publicUrl !== undefined) {
+    const u = clamp(b.publicUrl, 300).trim().replace(/\/+$/, '');
+    if (u && !/^https?:\/\/[^\s/]+/.test(u)) { const e = new Error('Use a full address, like https://my-wisps.tailnet.ts.net:8443'); e.status = 400; throw e; }
+    s.publicUrl = u;
+  }
+  if (b.name !== undefined) s.name = clamp(b.name, 60).trim();
+  save(); return { ok: true };
+});
+route('POST', '/api/contacts/invite', (b) => peers.createInvite({ name: clamp(b.name, 60), wispId: b.wispId }));
+route('POST', '/api/contacts/accept', async (b) => peers.acceptInvite(clamp(b.code, 2000), { wispId: b.wispId }));
+route('PATCH', '/api/contacts/:cid', (b, { cid }) => {
+  const c = peers.getContact(cid); if (!c) throw404();
+  if (b.name !== undefined) c.name = clamp(b.name, 60).trim() || c.name;
+  if (b.wispId !== undefined && getWisp(b.wispId)) c.wispId = b.wispId;
+  if (b.share !== undefined) c.share = clamp(b.share, 3000);
+  if (b.sendApproval !== undefined) c.sendApproval = b.sendApproval === 'allow' ? 'allow' : 'ask';
+  if (b.availability !== undefined) c.availability = !!b.availability;
+  save(); return c;
+});
+route('DELETE', '/api/contacts/:cid', (b, { cid }) => { peers.removeContact(cid); return { ok: true }; });
+route('GET', '/api/contacts/:cid/log', (b, { cid }) => { if (!peers.getContact(cid)) throw404(); return peers.readLog(cid); });
 
 // ---- connectors -------------------------------------------------------------
 const REDIRECT = `http://127.0.0.1:${PORT}/oauth/google/callback`;
@@ -398,5 +438,6 @@ connectors.ensureDefaults();
 startScheduler();
 amazon.startWatcher();
 telegram.startTelegram();
+peers.startPeerServer();
 server.listen(PORT, HOST, () => console.log(`Wisps is running → http://localhost:${PORT}  (data: ${DATA_DIR})`));
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { flush(); process.exit(0); });

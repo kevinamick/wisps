@@ -1,0 +1,28 @@
+{
+  "name": "wisps",
+  "version": "0.1.0",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "description": "Always-on AI agents for you and your household, powered by your Claude Code subscription",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.285",
+    "@playwright/mcp": "^0.0.83",
+    "dompurify": "^3.4.16",
+    "htm": "^3.1.1",
+    "marked": "^18.0.14",
+    "preact": "^10.29.8",
+    "zod": "^4.6.5"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kevinamick/wisps.git"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+data/
+deploy/.vm
+deploy/wisps.env
+*.log
+.DS_Store

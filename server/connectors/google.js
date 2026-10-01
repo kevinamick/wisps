@@ -82,6 +82,13 @@ export function client(conn, { secrets, setSecret, save }) {
   };
 }
 
+// Busy blocks only (no titles, places or guests), for telling a friend's Wisp when you're free.
+export async function freeBusy(conn, ctx, timeMin, timeMax) {
+  const g = client(conn, ctx);
+  const r = await g('/calendar/v3/freeBusy', { method: 'POST', body: { timeMin, timeMax, items: [{ id: 'primary' }] } });
+  return r.calendars?.primary?.busy || [];
+}
+
 // ---- helpers -------------------------------------------------------------------
 const ok = (text) => ({ content: [{ type: 'text', text: String(text).slice(0, 60000) }] });
 const fail = (e) => ({ content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true });

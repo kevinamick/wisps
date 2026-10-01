@@ -56,7 +56,8 @@ export function suggestRule(tool, input) {
  * mode: 'ask' | 'balanced' | 'autonomous'; kind: 'chat' | 'task' | 'checkin'
  */
 export function evaluate(wisp, tool, input, { blockedPath, kind, origin } = {}) {
-  if (tool.startsWith('mcp__wisp__')) return { decision: 'allow', reason: 'Wisp tool' };
+  // Talking to a friend's Wisp acts on your behalf outside this machine, so it asks unless a rule says otherwise.
+  if (tool.startsWith('mcp__wisp__') && tool !== 'mcp__wisp__message_contact') return { decision: 'allow', reason: 'Wisp tool' };
 
   // Connectors: access (whose account is it, and who's asking?) is checked before any rule.
   const conn = tool.startsWith('mcp__') ? toolInfo(tool, input) : null;
@@ -73,6 +74,8 @@ export function evaluate(wisp, tool, input, { blockedPath, kind, origin } = {}) 
   }
 
   if (kind === 'checkin' && !(conn && conn.risk === 'read')) return { decision: 'deny', reason: 'Check-ins are read-only research. Propose a task instead.' };
+  if (kind === 'household' && !(conn && conn.risk === 'read')) return { decision: 'deny', reason: 'Answering another Wisp is read-only.' };
+  if (tool === 'mcp__wisp__message_contact') return { decision: 'ask', reason: "Talks to a friend's Wisp on your behalf" };
 
   const mode = wisp.autonomy || 'balanced';
   if (conn) {

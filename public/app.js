@@ -165,7 +165,7 @@ function App() {
           ${tab === 'chat' && html`<${ChatView} key=${wisp.id} wisp=${wisp} S=${S} goWork=${() => setTab('work')} />`}
           ${tab === 'work' && html`<${WorkView} key=${wisp.id} wisp=${wisp} S=${S} />`}
           ${tab === 'computer' && html`<${ComputerView} key=${wisp.id} wisp=${wisp} S=${S} />`}
-          ${tab === 'memory' && html`<${MemoryView} key=${wisp.id} wisp=${wisp} />`}
+          ${tab === 'memory' && html`<${MemoryView} key=${wisp.id} wisp=${wisp} S=${S} />`}
           ${tab === 'setup' && html`<${SetupView} key=${wisp.id} wisp=${wisp} S=${S} onDeleted=${() => { setSel(null); setTab('chat'); }} />`}
         </div>` : html`<${Onboarding} onNew=${() => setModal('new')} />`}
     </main>
@@ -282,7 +282,7 @@ function Message({ m, wisp, S, goWork }) {
   if (m.role === 'user') return html`<div class="msg user"><div><div class="bubble">${m.text}</div>${m.source && m.source !== 'web' && html`<div class="src">${m.author ? `${m.author} · ` : ''}via ${m.source}</div>`}</div></div>`;
   if (m.role === 'event') {
     const item = m.inboxId && S.inbox.find((i) => i.id === m.inboxId);
-    return html`<div class="msg event"><span class="ev">${m.kind === 'memory' ? '🧠' : m.kind === 'approval' ? '✋' : '·'} ${m.text}
+    return html`<div class="msg event"><span class="ev">${m.kind === 'memory' ? '🧠' : m.kind === 'approval' ? '✋' : m.kind === 'peer' ? '' : '·'} ${m.text}
       ${item && !item.resolved && html`<button class="btn sm ok" onClick=${() => api('POST', `/api/inbox/${item.id}/resolve`, { decision: 'allow' })}>Approve</button><button class="btn sm" onClick=${() => api('POST', `/api/inbox/${item.id}/resolve`, { decision: 'deny' })}>Deny</button>`}
       ${item?.resolved && html`<b>${item.resolution === 'deny' ? 'denied' : item.resolution === 'expired' ? 'expired' : 'approved'}</b>`}</span></div>`;
   }
@@ -460,25 +460,113 @@ function ComputerView({ wisp, S }) {
 const fileIcon = (n) => (/\.(md|txt)$/i.test(n) ? '📝' : /\.(png|jpe?g|gif|svg|webp)$/i.test(n) ? '🖼️' : /\.(csv|xlsx?)$/i.test(n) ? '📊' : /\.(html?)$/i.test(n) ? '🌐' : /\.(js|ts|py|sh|json|css)$/i.test(n) ? '⌨️' : '📄');
 
 // ---------- Memory ----------
-function MemoryView({ wisp }) {
+const KIND_ICON = { person: '🧑', place: '📍', plan: '🗺️', event: '📅', preference: '💛', project: '🛠️', thing: '📦', topic: '💭' };
+const scopeLabel = (scope, S) => {
+  if (scope === 'owner') return null;
+  if (scope === 'family') return 'family';
+  const [k, v] = scope.split(':');
+  if (k === 'person') return `from ${S.settings.telegram.people.find((p) => p.id === v)?.name || 'someone'}'s DMs`;
+  if (k === 'group') return `from ${S.settings.telegram.groups.find((g) => String(g.chatId) === v)?.name || 'a group'}`;
+  return null;
+};
+
+function MemoryView({ wisp, S }) {
+  return html`<div class="setup">
+    <${Bubbles} wisp=${wisp} S=${S} />
+    <${Lessons} wisp=${wisp} />
+  </div>`;
+}
+
+function Bubbles({ wisp, S }) {
+  const [list, setList] = useState(null);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+  const [adding, setAdding] = useState(null);
+  const load = () => api('GET', `/api/wisps/${wisp.id}/bubbles`).then(setList);
+  useEffect(() => { load(); }, [wisp.id]);
+  useEffect(() => onEvent((e) => { if (e.type === 'bubbles' && e.wispId === wisp.id) load(); }), [wisp.id]);
+  if (!list) return html`<div class="card"><h3>Memory bubbles</h3><div class="hint">Loading…</div></div>`;
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = list.filter((b) => words.every((w) => b.title.toLowerCase().includes(w) || (b.aliases || []).some((a) => a.toLowerCase().includes(w)) || b.facts.some((f) => f.text.toLowerCase().includes(w))))
+    .sort((a, b) => (!!b.pinned - !!a.pinned) || (new Date(b.updatedAt) - new Date(a.updatedAt)));
+  const title = (id) => list.find((b) => b.id === id)?.title;
+  const sel = list.find((b) => b.id === open);
+  return html`<div class="card">
+    <div class="row"><h3 class="grow" style="margin:0">Memory bubbles</h3>
+      <label class="row" style="gap:6px;font-size:13px" title="After each chat, a quick pass files anything lasting into bubbles"><label class="switch"><input type="checkbox" checked=${wisp.capture !== false} onChange=${(e) => api('PATCH', `/api/wisps/${wisp.id}`, { capture: e.target.checked })} /><span></span></label>learn from chats</label></div>
+    <div class="hint">What's going on in your life, as ${wisp.name} understands it: people, places, plans, events. Each bubble links to related ones, and ${wisp.name} brings up the relevant ones when they matter. Things learned in someone's DM or a group stay there unless you share the bubble with the family.</div>
+    <div class="row" style="margin-top:10px"><input class="in grow" style="width:auto" placeholder="Search memories…" value=${q} onInput=${(e) => setQ(e.target.value)} /><button class="btn" onClick=${() => setAdding({ topic: '', kind: 'person', fact: '' })}>+ Bubble</button></div>
+    ${adding && html`<div class="item" style="margin-top:10px;box-shadow:none">
+      <div class="two"><input class="in" placeholder="Title (e.g. Mom, Japan trip)" value=${adding.topic} onInput=${(e) => setAdding({ ...adding, topic: e.target.value })} />
+        <select class="in" value=${adding.kind} onChange=${(e) => setAdding({ ...adding, kind: e.target.value })}>${Object.keys(KIND_ICON).map((k) => html`<option value=${k}>${KIND_ICON[k]} ${k}</option>`)}</select></div>
+      <input class="in" style="margin-top:8px" placeholder="First thing to remember" value=${adding.fact} onInput=${(e) => setAdding({ ...adding, fact: e.target.value })} />
+      <div class="row" style="margin-top:8px;justify-content:flex-end"><button class="btn ghost" onClick=${() => setAdding(null)}>Cancel</button><button class="btn primary" disabled=${!adding.topic.trim() || !adding.fact.trim()} onClick=${() => api('POST', `/api/wisps/${wisp.id}/bubbles`, adding).then((b) => { setAdding(null); setOpen(b.id); load(); }).catch((e) => toast(e.message))}>Add</button></div></div>`}
+    <div class="bubbles">
+      ${shown.map((b) => html`<button class="bubble-card ${b.id === open ? 'on' : ''}" onClick=${() => setOpen(b.id === open ? null : b.id)}>
+        <span class="bt">${KIND_ICON[b.kind] || '💭'} ${b.title}${b.pinned ? ' 📌' : ''}</span>
+        <span class="bs">${b.facts.length} note${b.facts.length === 1 ? '' : 's'}${b.links?.length ? ` · ↔ ${b.links.map(title).filter(Boolean).slice(0, 2).join(', ')}${b.links.length > 2 ? '…' : ''}` : ''}${b.shared ? ' · family' : ''}</span>
+      </button>`)}
+    </div>
+    ${!list.length && html`<div class="hint" style="padding:8px 0">No bubbles yet. As you chat, ${wisp.name} files away the people, plans and places that come up.</div>`}
+    ${list.length > 0 && !shown.length && html`<div class="hint" style="padding:8px 0">Nothing matches.</div>`}
+    ${sel && html`<${BubbleEditor} key=${sel.id + sel.updatedAt} b=${sel} list=${list} wisp=${wisp} S=${S} close=${() => setOpen(null)} />`}
+  </div>`;
+}
+
+function BubbleEditor({ b, list, wisp, S, close }) {
+  const [f, setF] = useState(() => ({ title: b.title, kind: b.kind, facts: b.facts.map((x) => ({ ...x })), links: [...(b.links || [])], aliases: (b.aliases || []).join(', ') }));
+  const [note, setNote] = useState('');
+  const [link, setLink] = useState('');
+  const url = `/api/wisps/${wisp.id}/bubbles/${b.id}`;
+  const patch = (body) => api('PATCH', url, body).catch((e) => toast(e.message));
+  const dirty = f.title !== b.title || f.kind !== b.kind || f.aliases !== (b.aliases || []).join(', ') || JSON.stringify(f.facts.map((x) => [x.id, x.text])) !== JSON.stringify(b.facts.map((x) => [x.id, x.text])) || JSON.stringify(f.links) !== JSON.stringify(b.links || []);
+  const others = list.filter((x) => x.id !== b.id);
+  return html`<div class="item" style="margin-top:12px;box-shadow:none">
+    <div class="row"><input class="in grow" style="width:auto;font-weight:600" value=${f.title} onInput=${(e) => setF({ ...f, title: e.target.value })} />
+      <select class="in" style="width:auto" value=${f.kind} onChange=${(e) => setF({ ...f, kind: e.target.value })}>${Object.keys(KIND_ICON).map((k) => html`<option value=${k}>${KIND_ICON[k]} ${k}</option>`)}</select>
+      <button class="btn sm ghost" onClick=${close}>✕</button></div>
+    <label class="lbl" style="margin-top:10px">Also known as</label>
+    <input class="in" placeholder="Other names, comma-separated (e.g. Mum, Linda)" value=${f.aliases} onInput=${(e) => setF({ ...f, aliases: e.target.value })} />
+    <label class="lbl" style="margin-top:10px">Notes</label>
+    ${f.facts.map((x, i) => html`<div class="rule"><input class="in grow" style="width:auto" value=${x.text} onInput=${(e) => setF({ ...f, facts: f.facts.map((y, j) => (j === i ? { ...y, text: e.target.value } : y)) })} />
+      ${scopeLabel(x.scope, S) && html`<span class="pill" title="Only used there">${scopeLabel(x.scope, S)}</span>`}
+      <span class="muted" style="font-size:12px;flex:none">${x.at ? ago(x.at) : 'new'}</span>
+      <button class="btn sm ghost" onClick=${() => setF({ ...f, facts: f.facts.filter((_, j) => j !== i) })}>✕</button></div>`)}
+    <div class="row" style="margin-top:6px"><input class="in grow" style="width:auto" placeholder="Add a note" value=${note} onInput=${(e) => setNote(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && note.trim()) { setF({ ...f, facts: [...f.facts, { text: note.trim() }] }); setNote(''); } }} />
+      <button class="btn sm" disabled=${!note.trim()} onClick=${() => { setF({ ...f, facts: [...f.facts, { text: note.trim() }] }); setNote(''); }}>Add</button></div>
+    <label class="lbl" style="margin-top:10px">Linked bubbles</label>
+    <div class="row" style="flex-wrap:wrap;gap:6px">${f.links.map((l) => html`<span class="chip" style="padding:3px 10px">${list.find((x) => x.id === l)?.title || '?'} <a href="#" onClick=${(e) => { e.preventDefault(); setF({ ...f, links: f.links.filter((y) => y !== l) }); }}>✕</a></span>`)}
+      <select class="in" style="width:auto;padding:5px 8px" value=${link} onChange=${(e) => { if (e.target.value) setF({ ...f, links: [...new Set([...f.links, e.target.value])] }); setLink(''); }}>
+        <option value="">+ link to…</option>${others.filter((x) => !f.links.includes(x.id)).map((x) => html`<option value=${x.id}>${x.title}</option>`)}</select></div>
+    <div class="row" style="margin-top:14px;flex-wrap:wrap">
+      <button class="btn primary" disabled=${!dirty} onClick=${() => patch({ title: f.title, kind: f.kind, facts: f.facts, links: f.links, aliases: f.aliases.split(',') }).then(() => toast('Saved'))}>Save</button>
+      <label class="row" style="gap:6px;font-size:13px" title="Pinned bubbles are always in mind"><label class="switch"><input type="checkbox" checked=${b.pinned} onChange=${(e) => patch({ pinned: e.target.checked })} /><span></span></label>pin</label>
+      <label class="row" style="gap:6px;font-size:13px" title="Usable in every DM and in family groups, not just where it was learned"><label class="switch"><input type="checkbox" checked=${b.shared} onChange=${(e) => patch({ shared: e.target.checked })} /><span></span></label>share with family</label>
+      <span class="grow"/>
+      ${others.length > 0 && html`<select class="in" style="width:auto;padding:5px 8px" value="" onChange=${(e) => { const from = others.find((x) => x.id === e.target.value); if (from && confirm(`Merge “${from.title}” into “${b.title}”?`)) api('POST', `${url}/merge`, { from: from.id }).then(() => toast('Merged')); }}>
+        <option value="">Merge in…</option>${others.map((x) => html`<option value=${x.id}>${x.title}</option>`)}</select>`}
+      <button class="btn danger" onClick=${() => confirm(`Forget everything in “${b.title}”?`) && api('DELETE', url).then(close)}>Forget</button>
+    </div>
+  </div>`;
+}
+
+function Lessons({ wisp }) {
   const [text, setText] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const load = () => api('GET', `/api/wisps/${wisp.id}/memory`).then((r) => { setText(r.text); setDirty(false); });
   useEffect(() => { load(); }, [wisp.id]);
   useEffect(() => onEvent((e) => { if (e.type === 'memory' && e.wispId === wisp.id && !dirty) load(); }), [wisp.id, dirty]);
-  return html`<div class="setup">
-    <div class="card">
-      <h3>What ${wisp.name} has learned</h3>
-      <div class="hint">${wisp.name} adds to this when you give 👍/👎 on its work, when you tell it things in chat, and when you dismiss its ideas. It reads this before every job. Edit freely.</div>
-      <textarea class="in" style="min-height:380px;font-family:var(--mono);font-size:13px" value=${text ?? ''} placeholder="Nothing yet. Memories appear as you work together." onInput=${(e) => { setText(e.target.value); setDirty(true); }} />
+  return html`<div class="card">
+      <h3>Lessons: how you like things done</h3>
+      <div class="hint">${wisp.name} adds to this when you give 👍/👎 on its work, when you tell it how you like things, and when you dismiss its ideas. It reads this before every job. Edit freely.</div>
+      <textarea class="in" style="min-height:300px;font-family:var(--mono);font-size:13px" value=${text ?? ''} placeholder="Nothing yet. Lessons appear as you work together." onInput=${(e) => { setText(e.target.value); setDirty(true); }} />
       <div class="row" style="margin-top:10px">
         <button class="btn primary" disabled=${!dirty} onClick=${() => api('PUT', `/api/wisps/${wisp.id}/memory`, { text }).then(() => { setDirty(false); toast('Memory saved'); })}>Save</button>
         <button class="btn" disabled=${busy || !text?.trim()} onClick=${async () => { setBusy(true); try { const r = await api('POST', `/api/wisps/${wisp.id}/memory/tidy`); setText(r.text); toast('Tidied up'); } finally { setBusy(false); } }}>${busy ? 'Tidying…' : '✨ Tidy up'}</button>
         ${dirty && html`<button class="btn ghost" onClick=${load}>Discard</button>`}
       </div>
-    </div>
-  </div>`;
+    </div>`;
 }
 
 // ---------- Setup ----------
@@ -615,6 +703,7 @@ function Settings({ S, close }) {
   return html`<div class="scrim" onClick=${close}></div><div class="modal" style="width:min(680px, calc(100vw - 24px))">
     <h2>Settings</h2>
     <${TelegramSettings} S=${S} />
+    <${FriendsSettings} S=${S} />
     <div class="card" style="margin:12px 0"><h3>Desktop notifications</h3><div class="hint">Get a ping when a Wisp needs your OK or finishes a task while this tab is in the background.</div>
       ${perm === 'granted' ? html`<span class="pill done">On</span>` : perm === 'unsupported' ? html`<span class="muted">Not supported in this browser</span>` : html`<button class="btn" onClick=${() => Notification.requestPermission().then(setPerm)}>Turn on</button>`}</div>
     <div class="card"><h3>Powered by your Claude subscription</h3><div class="hint" style="margin:0">Wisps runs every agent through the Claude Code CLI on this machine, signed in with your Claude plan, so there's no API key and no per-token bill. Heavy use counts against your plan's usage limits. Data lives in <code>${S.dataDir}</code>.</div></div>
@@ -687,6 +776,61 @@ function TelegramSettings({ S }) {
       <label class="lbl" style="margin-top:18px">Direct messages</label>
       <div class="row"><span class="muted" style="font-size:14px">DMs go to</span>${wispSelect(t.defaultWispId, (v) => put({ defaultWispId: v }))}<span class="hint" style="margin:0">(anyone can switch with <code>/wisp Name</code>)</span></div>
       <label class="row" style="margin-top:10px;gap:8px;font-size:14px"><label class="switch"><input type="checkbox" checked=${t.updates} onChange=${(e) => put({ updates: e.target.checked })} /><span></span></label>Send results of tasks started in the app to approvers on Telegram</label>`}
+  </div>`;
+}
+
+// ---------- Friends' Wisps ----------
+function FriendsSettings({ S }) {
+  const peer = S.peer || {};
+  const [addr, setAddr] = useState(peer.publicUrl || '');
+  const [me, setMe] = useState(peer.name || '');
+  const [inv, setInv] = useState({ name: '' });
+  const [code, setCode] = useState(null);
+  const [accept, setAccept] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [logFor, setLogFor] = useState(null);
+  const [edit, setEdit] = useState({});
+  const copy = (text) => navigator.clipboard.writeText(text).then(() => toast('Copied'), () => prompt('Copy this:', text));
+  const put = (body) => api('PUT', '/api/peer/settings', body).then(() => toast('Saved')).catch((e) => toast(e.message));
+  const patch = (c, body) => api('PATCH', `/api/contacts/${c.id}`, body).catch((e) => toast(e.message));
+  const wispSelect = (value, onChange) => html`<select class="in" style="width:auto;padding:5px 8px" value=${value || S.wisps[0]?.id || ''} onChange=${(e) => onChange(e.target.value)}>${S.wisps.map((d) => html`<option value=${d.id}>${d.name}</option>`)}</select>`;
+  return html`<div class="card" style="margin-top:12px">
+    <h3>Friends' Wisps</h3>
+    <div class="hint">Let your Wisp work things out with friends' Wisps: find a time for dinner, compare plans, pass messages along. You decide what it may share with each friend. Nothing is agreed without your OK, and you can read every conversation here.</div>
+
+    <label class="lbl" style="margin-top:12px">Your peer address</label>
+    <div class="hint" style="margin:0 0 6px">Friends' Wisps reach yours on port <code>${peer.port}</code>, which serves only Wisp-to-Wisp messages, never this app. Expose just that port, for example with <code>tailscale serve --bg --https=8443 http://127.0.0.1:${peer.port}</code> plus a Tailscale share, then paste the address here.</div>
+    <div class="row"><input class="in grow" style="width:auto" placeholder="https://my-wisps.tailnet.ts.net:8443" value=${addr} onInput=${(e) => setAddr(e.target.value)} />
+      <input class="in" style="width:150px" placeholder="Your name" title="How friends' Wisps know you" value=${me} onInput=${(e) => setMe(e.target.value)} />
+      <button class="btn" disabled=${addr === (peer.publicUrl || '') && me === (peer.name || '')} onClick=${() => put({ publicUrl: addr, name: me })}>Save</button></div>
+
+    <label class="lbl" style="margin-top:16px">Friends</label>
+    ${(S.contacts || []).map((c) => { const e = edit[c.id]; return html`<div class="item" style="box-shadow:none;margin-bottom:8px">
+      <div class="row" style="flex-wrap:wrap"><b>${c.name}</b>${c.status === 'linked' ? html`<span class="pill done">paired</span>` : html`<span class="pill waiting">invite sent</span>`}
+        ${c.lastAt && html`<span class="muted" style="font-size:12.5px">last talked ${ago(c.lastAt)}</span>`}<span class="grow"/>
+        <span class="muted" style="font-size:13px">answered by</span>${wispSelect(c.wispId, (v) => patch(c, { wispId: v }))}</div>
+      <label class="lbl" style="margin-top:8px">What your Wisp may share with ${c.name}</label>
+      <textarea class="in" rows="3" value=${e ?? c.share} placeholder="e.g. Whether I'm free on weeknights. I'm vegetarian. Never share my address." onInput=${(ev) => setEdit({ ...edit, [c.id]: ev.target.value })} />
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        ${e !== undefined && e !== c.share && html`<button class="btn sm primary" onClick=${() => patch(c, { share: e }).then(() => { setEdit({ ...edit, [c.id]: undefined }); toast('Saved'); })}>Save rules</button>`}
+        <label class="row" style="gap:6px;font-size:13px" title="Their Wisp can see when you're busy (no event details), from your Google Calendar"><label class="switch"><input type="checkbox" checked=${c.availability} onChange=${(ev) => patch(c, { availability: ev.target.checked })} /><span></span></label>free/busy</label>
+        <label class="row" style="gap:6px;font-size:13px" title="Let your Wisp message theirs without asking you first"><label class="switch"><input type="checkbox" checked=${c.sendApproval === 'allow'} onChange=${(ev) => patch(c, { sendApproval: ev.target.checked ? 'allow' : 'ask' })} /><span></span></label>message without asking</label>
+        <span class="grow"/>
+        <button class="btn sm" onClick=${() => (logFor?.id === c.id ? setLogFor(null) : api('GET', `/api/contacts/${c.id}/log`).then((l) => setLogFor({ id: c.id, l })))}>${logFor?.id === c.id ? 'Hide' : 'Conversations'}</button>
+        <button class="btn sm ghost danger" onClick=${() => confirm(`Remove ${c.name}? Their Wisp won't be able to reach yours.`) && api('DELETE', `/api/contacts/${c.id}`)}>Remove</button></div>
+      ${logFor?.id === c.id && html`<div style="margin-top:10px;max-height:320px;overflow:auto">${logFor.l.length ? logFor.l.map((x) => html`<div style="margin:6px 0;font-size:13.5px"><span class="muted" style="font-size:12px">${ago(x.at)} · ${x.dir === 'out' ? `you${x.wisp ? ` (${x.wisp})` : ''}` : `${c.name}'s Wisp`}</span><${Md} text=${x.text} /></div>`) : html`<div class="hint">No messages yet.</div>`}</div>`}
+    </div>`; })}
+    ${!(S.contacts || []).length && html`<div class="hint">No friends yet.</div>`}
+
+    <div class="two" style="margin-top:10px">
+      <div><label class="lbl">Invite a friend</label>
+        <div class="row"><input class="in grow" style="width:auto" placeholder="Their name" value=${inv.name} onInput=${(e) => setInv({ ...inv, name: e.target.value })} />
+          <button class="btn" disabled=${!inv.name.trim() || !peer.publicUrl} title=${peer.publicUrl ? '' : 'Set your peer address first'} onClick=${() => api('POST', '/api/contacts/invite', inv).then((r) => { setCode({ name: inv.name, code: r.code }); setInv({ name: '' }); }).catch((e) => toast(e.message))}>Invite</button></div>
+        ${code && html`<div class="hint">Send ${code.name} this code. They paste it into their Wisps under Settings → Friends' Wisps.<div class="row" style="margin-top:6px"><code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px">${code.code}</code><button class="btn sm" onClick=${() => copy(code.code)}>Copy</button></div></div>`}</div>
+      <div><label class="lbl">Got an invite code?</label>
+        <div class="row"><input class="in grow" style="width:auto" placeholder="wisp1.…" value=${accept} onInput=${(e) => setAccept(e.target.value)} />
+          <button class="btn" disabled=${busy || !accept.trim() || !peer.publicUrl} title=${peer.publicUrl ? '' : 'Set your peer address first'} onClick=${async () => { setBusy(true); try { const c = await api('POST', '/api/contacts/accept', { code: accept }); setAccept(''); toast(`Paired with ${c.name}`); } catch (e) { toast(e.message); } finally { setBusy(false); } }}>${busy ? 'Pairing…' : 'Pair'}</button></div></div>
+    </div>
   </div>`;
 }
 

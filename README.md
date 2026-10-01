@@ -24,11 +24,57 @@ Wisps runs every agent through the Claude Agent SDK using that sign-in.
 | **Its own computer** | Each Wisp works in `data/wisps/<id>/computer/`. You can share extra folders in Setup. |
 | **Proactive check-ins** | Every few hours it does read-only research toward its goals, then proposes tasks or pings you. |
 | **Schedules** | One-time ("Oct 1 at 8am") or recurring ("every weekday at 8"), from chat or the Work tab. |
-| **Memory** | Learns from 👍/👎 feedback, from what you tell it, and from ideas you dismiss. You can edit it. |
+| **Memory bubbles** | Files the people, places, plans and events in your life into linked "bubbles" as you chat, and brings up the relevant ones when they matter. |
+| **Lessons** | Learns how you like things done from 👍/👎 feedback, from what you tell it, and from ideas you dismiss. You can edit both kinds of memory. |
+| **Friends' Wisps** | Works things out with friends' Wisps (a time for dinner, who brings what) under sharing rules you set for each friend. Household Wisps can ask each other too. |
 | **Approvals** | Risky or outward-facing steps (sending, buying, publishing, deleting) wait for your OK, once per action rather than per click. |
 
 **Autonomy modes:** Cautious, Balanced (the default), and Autonomous. Rules like `Bash(npm test*)` or
 `Bash(git push*)` override the mode, and "Always allow" on an approval adds a rule.
+
+## Memory bubbles
+
+Each Wisp keeps two kinds of memory, both in the **Memory** tab:
+
+- **Bubbles** hold what's going on in your life: one per person, place, plan, event, project or thing (say "Mom" or
+  "Japan trip"), linked to related bubbles. After each chat, a quick Haiku pass files anything lasting into them.
+  You can switch that off with "learn from chats". Before each reply, the Wisp sees pinned bubbles plus the ones
+  relevant to the message, and it can `recall` the rest.
+- **Lessons** (`memory.md`) hold how you like things done.
+
+Every fact remembers where it was learned. Something said in Sam's DM is used only in Sam's DMs, and something said
+in a group only in that group, unless you turn on **share with family** for that bubble. The web app, scheduled
+work and check-ins see everything.
+
+**Use your memory in other AI apps.** `server/memory-mcp.js` is an MCP server over the same files:
+
+```
+claude mcp add wisps-memory -- node /path/to/wisps/server/memory-mcp.js
+```
+
+It gives Claude Code (or any MCP client on this machine) `memory_recall`, `memory_remember`, `memory_lessons` and
+`wisps_list`.
+
+## Friends' Wisps
+
+Your Wisp can coordinate with a friend's Wisp running on their own machine. For example: "Find a night this
+week that works for Alex, and check what food he likes."
+
+1. Friends' Wisps connect on a **separate port** (`PEER_PORT`, default 4778). It serves only Wisp-to-Wisp
+   messages, never the app or its API. Expose just that port, for example
+   `tailscale serve --bg --https=8443 http://127.0.0.1:4778` and share the machine with your friend in Tailscale.
+2. In Settings → Friends' Wisps, paste that address and your name. Then **Invite** a friend and send them the
+   `wisp1.…` code. They paste it under "Got an invite code?" on their side.
+3. For each friend, write what your Wisp may share (for example "whether I'm free on weeknights; I'm vegetarian;
+   never share my address"), and choose whether it may see your Google Calendar free/busy (times only, no
+   details).
+
+When a friend's Wisp messages yours, it gets none of your Wisp's tools, files, connectors or memory. It sees only
+your sharing rules (and free/busy, if you turned that on). It can notify you and propose tasks, which wait for
+your OK. Your Wisp's first message to a friend in a job waits for your approval unless you turn on "message without
+asking". Every conversation is logged under that friend in Settings.
+
+Wisps in the same household can also ask each other things (`ask_wisp`), read-only.
 
 ## Telegram and a family group
 

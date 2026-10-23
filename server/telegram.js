@@ -72,6 +72,20 @@ function logGroup(chatId, who, text) {
   groupLog.set(chatId, log.slice(-25));
 }
 
+// ---- messages a Wisp starts itself (the send_message tool) -----------------
+export const messageTargets = () => [
+  ...cfg().groups.map((g) => ({ name: g.name, chatId: g.chatId, group: true })),
+  ...cfg().people.filter((p) => p.userId).map((p) => ({ name: p.name, chatId: p.userId, group: false })),
+];
+export async function sendTo(to, text, wisp) {
+  const t = messageTargets().find((x) => x.name === to);
+  if (!t) return `There's no group or person called "${to}". You can message: ${messageTargets().map((x) => x.name).join(', ')}.`;
+  if (tg.status !== 'connected') return "Telegram isn't connected right now, so nothing was sent.";
+  if (!(await send(t.chatId, text, { wisp }))) return "Telegram didn't accept the message, so nothing was sent.";
+  if (t.group) logGroup(t.chatId, wisp.name, text);
+  return `Sent to ${to}.`;
+}
+
 // ---- incoming --------------------------------------------------------------
 const toldUnknown = new Map(); // userId -> last time we explained
 function noteUnknown(from, where) {

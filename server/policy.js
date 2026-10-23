@@ -1,7 +1,7 @@
 // Decides whether a Wisp may use a tool on its own, must ask you first, or is blocked.
 import path from 'node:path';
 import os from 'node:os';
-import { computerDir } from './store.js';
+import { computerDir, state } from './store.js';
 import { toolInfo, canAccess } from './connectors/index.js';
 
 // Actions that always need your OK unless you've written an explicit allow rule.
@@ -18,7 +18,9 @@ const RISKY_BASH = [
 const PRIMARY = {
   Bash: 'command', Read: 'file_path', Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path', WebFetch: 'url', WebSearch: 'query', Glob: 'pattern', Grep: 'pattern',
+  mcp__wisp__send_message: 'to',
 };
+const SEND = 'mcp__wisp__send_message';
 const FILE_WRITERS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 export const primaryArg = (tool, input) => String(input?.[PRIMARY[tool]] ?? '');
@@ -48,6 +50,7 @@ export function suggestRule(tool, input) {
     try { return `WebFetch(${new URL(input.url).origin}/*)`; } catch { /* fall through */ }
   }
   if (FILE_WRITERS.has(tool) && input?.file_path) return `${tool}(${path.dirname(expand(input.file_path))}/*)`;
+  if (tool === SEND && input?.to) return `${tool}(${input.to})`;
   return tool;
 }
 
@@ -56,7 +59,7 @@ export function suggestRule(tool, input) {
  * mode: 'ask' | 'balanced' | 'autonomous'; kind: 'chat' | 'task' | 'checkin'
  */
 export function evaluate(wisp, tool, input, { blockedPath, kind, origin } = {}) {
-  if (tool.startsWith('mcp__wisp__')) return { decision: 'allow', reason: 'Wisp tool' };
+  if (tool.startsWith('mcp__wisp__') && tool !== SEND) return { decision: 'allow', reason: 'Wisp tool' };
 
   // Connectors: access (whose account is it, and who's asking?) is checked before any rule.
   const conn = tool.startsWith('mcp__') ? toolInfo(tool, input) : null;
@@ -70,6 +73,14 @@ export function evaluate(wisp, tool, input, { blockedPath, kind, origin } = {}) 
   for (const b of ['deny', 'ask', 'allow']) {
     const hit = hits.find((r) => r.behavior === b);
     if (hit) return { decision: b, reason: `Your rule: ${hit.pattern}` };
+  }
+
+  // Posting in a connected family group, or messaging whoever asked, is fine. Anyone else privately needs an OK.
+  if (tool === SEND) {
+    const tgs = state.settings.telegram;
+    if (tgs.groups.some((g) => g.name === input?.to)) return { decision: 'allow', reason: 'Posts in a family group you connected' };
+    if (origin?.personId && tgs.people.find((p) => p.id === origin.personId)?.name === input?.to) return { decision: 'allow', reason: 'Messages the person who asked' };
+    return { decision: 'ask', reason: `Messages ${input?.to || 'someone'} privately on Telegram` };
   }
 
   if (kind === 'checkin' && !(conn && conn.risk === 'read')) return { decision: 'deny', reason: 'Check-ins are read-only research. Propose a task instead.' };

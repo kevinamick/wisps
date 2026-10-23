@@ -10,6 +10,7 @@ import {
 } from './store.js';
 import { evaluate, suggestRule, primaryArg } from './policy.js';
 import * as connectors from './connectors/index.js';
+import { messageTargets, sendTo } from './telegram.js';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || [`${os.homedir()}/.local/bin/claude`].find((p) => fs.existsSync(p));
 const MAX_PARALLEL_TASKS = Number(process.env.WISPS_MAX_PARALLEL || 3);
@@ -53,7 +54,7 @@ You're working on a background task, and your owner isn't watching. Work autonom
 Nobody asked you anything. This is your periodic check-in. Review your goals, memory, and recent work, and do light read-only research (web, shared folders) to spot something genuinely useful to do next: a follow-up, a problem, an opportunity, a deadline. If you have connectors like email or calendar, skim what's new and upcoming. If you find something, call propose_task (at most 2, and never duplicate pending ones). If something needs your owner's attention now, call notify. If nothing is worth their time, say "Nothing new." Staying quiet is fine.`,
   };
   const people = (state.settings.telegram?.people || []);
-  const household = people.length ? `\n## People\nYou're shared with a household. Messages that arrive by Telegram are prefixed with who's talking and where (a direct message or the family group). ${people.map((p) => `${p.name}${p.canApprove ? ' (can approve risky actions)' : ''}`).join(', ')}. Approval requests (purchases, sending email, etc.) go privately to the approvers, even when someone else asked, so tell the person asking that it's waiting for the approver's OK. Address people by name, keep track of who asked for what, and respect that some things are one person's business. On Telegram, keep replies short and chatty: no tables or headings.\n` : '';
+  const household = people.length ? `\n## People\nYou're shared with a household. Messages that arrive by Telegram are prefixed with who's talking and where (a direct message or the family group). ${people.map((p) => `${p.name}${p.canApprove ? ' (can approve risky actions)' : ''}`).join(', ')}. Approval requests (purchases, sending email, etc.) go privately to the approvers, even when someone else asked, so tell the person asking that it's waiting for the approver's OK. To pass something on to someone or post in the family group, use send_message. Address people by name, keep track of who asked for what, and respect that some things are one person's business. On Telegram, keep replies short and chatty: no tables or headings.\n` : '';
   return `# You are ${wisp.name}, a Wisp
 You are ${wisp.name}, an always-on personal agent running on your owner's own computer, powered by Claude.${wisp.role ? ` Your role: ${wisp.role}.` : ''}
 ${wisp.persona ? `\nInstructions from your owner:\n${wisp.persona}\n` : ''}
@@ -116,6 +117,12 @@ function wispTools(wisp, kind, taskId, origin) {
       async () => ok(state.tasks.filter((t) => t.wispId === wisp.id).slice(-20)
         .map((t) => `${t.id} [${t.status}] ${t.title}`).join('\n') || 'No tasks.')),
   ];
+  const targets = messageTargets().map((t) => t.name);
+  if (targets.length && kind !== 'checkin') {
+    tools.push(tool('send_message', 'Send a Telegram message to a family group or to one person. Use it when someone asks you to tell somebody something or to post in the group. Your normal reply already goes back to whoever is talking to you, so you don\'t need this to answer them.',
+      { to: z.enum(targets), message: z.string() },
+      async ({ to, message }) => ok(await sendTo(to, message, wisp))));
+  }
   if (kind === 'chat') {
     tools.push(tool('start_task', 'Start background work now. Use this for anything that takes more than a minute or two.',
       { title: z.string().describe('Short title'), detail: z.string().describe('Full instructions, including everything relevant from the conversation') },
@@ -142,6 +149,7 @@ function describeAction(toolName, input) {
   if (ci?.tool === 'play_submit_data_safety') return { title: 'Submit the Play Data safety form', body: `From \`${input.csv_file}\`. Open it in your Wisp's Computer tab to review the answers first.` };
   if (ci?.tool === 'play_promote_release' || ci?.tool === 'play_update_rollout') return { title: ci.tool === 'play_promote_release' ? `Promote ${input.from_track} → ${input.to_track}${input.rollout_percent && input.rollout_percent < 100 ? ` at ${input.rollout_percent}%` : ''}` : `${input.action.replace('_', ' ')} rollout on ${input.track}${input.percent ? ` → ${input.percent}%` : ''}`, body: `This changes what real users get on Google Play.${input.release_notes ? `\n\n**Release notes:** ${input.release_notes}` : ''}` };
   if (ci) return { title: `${ci.connector.name}: ${ci.tool.replace(/_/g, ' ')}`, body: '```json\n' + JSON.stringify(input, null, 2).slice(0, 1500) + '\n```' };
+  if (toolName === 'mcp__wisp__send_message') return { title: `Message ${input.to} on Telegram`, body: String(input.message || '').slice(0, 2500) };
   if (toolName === 'Write') return { title: `Write ${arg}`, body: '```\n' + String(input.content || '').slice(0, 1500) + '\n```' };
   if (toolName === 'Edit') return { title: `Edit ${arg}`, body: '```diff\n' + String(input.old_string || '').split('\n').map((l) => '- ' + l).join('\n').slice(0, 700) + '\n' + String(input.new_string || '').split('\n').map((l) => '+ ' + l).join('\n').slice(0, 700) + '\n```' };
   return { title: `${toolName.replace(/^mcp__/, '')}${arg ? ': ' + arg.slice(0, 80) : ''}`, body: '```json\n' + JSON.stringify(input, null, 2).slice(0, 1500) + '\n```' };

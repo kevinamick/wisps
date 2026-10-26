@@ -398,25 +398,35 @@ function FeedItem({ e, result }) {
   return null;
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const ordinal = (n) => n + ((n % 100 >= 11 && n % 100 <= 13) ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+
 function Schedules({ wisp, S }) {
   const list = S.schedules.filter((s) => s.wispId === wisp.id);
   const [form, setForm] = useState(null);
   const save = async () => {
-    const every = form.freq === 'once' ? { kind: 'once', at: form.at } : form.freq === 'daily' ? { kind: 'daily', time: form.time } : { kind: 'interval', minutes: Number(form.freq) };
+    const every = form.freq === 'once' ? { kind: 'once', at: form.at } : form.freq === 'daily' ? { kind: 'daily', time: form.time }
+      : form.freq === 'weekly' ? { kind: 'weekly', days: form.weekDays, time: form.time }
+      : form.freq === 'monthly' ? { kind: 'monthly', days: form.monthDays.split(/[^\d]+/).filter(Boolean).map(Number), time: form.time } : { kind: 'interval', minutes: Number(form.freq) };
     await api('POST', '/api/schedules', { wispId: wisp.id, title: form.title, detail: form.detail, every });
     setForm(null); toast('Recurring task saved');
   };
-  const desc = (e) => (e.kind === 'once' ? `Once, ${new Date(e.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : e.kind === 'daily' ? `Daily at ${e.time}` : e.minutes % 60 === 0 ? `Every ${e.minutes / 60}h` : `Every ${e.minutes}m`);
+  const desc = (e) => (e.kind === 'once' ? `Once, ${new Date(e.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : e.kind === 'daily' ? `Daily at ${e.time}`
+    : e.kind === 'weekly' ? `${e.days.join() === '1,2,3,4,5' ? 'Weekdays' : e.days.map((d) => WEEKDAYS[d]).join(', ')} at ${e.time}`
+    : e.kind === 'monthly' ? `Monthly on the ${e.days.map(ordinal).join(', ')} at ${e.time}` : e.minutes % 60 === 0 ? `Every ${e.minutes / 60}h` : `Every ${e.minutes}m`);
+  const daysOk = form && (form.freq === 'weekly' ? form.weekDays.length : form.freq === 'monthly' ? /\b([1-9]|[12]\d|3[01])\b/.test(form.monthDays) : true);
   return html`<div>
-    <div class="group-h">Recurring<button class="btn sm ghost" onClick=${() => setForm(form ? null : { title: '', detail: '', freq: 'daily', time: '08:00' })}>${form ? 'Cancel' : '+ Add'}</button></div>
+    <div class="group-h">Recurring<button class="btn sm ghost" onClick=${() => setForm(form ? null : { title: '', detail: '', freq: 'daily', time: '08:00', weekDays: [1, 2, 3, 4, 5], monthDays: '1, 15' })}>${form ? 'Cancel' : '+ Add'}</button></div>
     ${form && html`<div class="card" style="padding:12px;display:flex;flex-direction:column;gap:8px;margin-bottom:8px">
       <input class="in" placeholder="e.g. Morning briefing" value=${form.title} onInput=${(e) => setForm({ ...form, title: e.target.value })} />
       <textarea class="in" rows="3" placeholder="What to do each time" value=${form.detail} onInput=${(e) => setForm({ ...form, detail: e.target.value })} />
       <div class="row"><select class="in" style="width:auto" value=${form.freq} onChange=${(e) => setForm({ ...form, freq: e.target.value })}>
-        <option value="once">Once, at…</option><option value="daily">Daily at…</option><option value="30">Every 30 min</option><option value="60">Every hour</option><option value="180">Every 3 hours</option><option value="720">Every 12 hours</option></select>
-        ${form.freq === 'daily' && html`<input class="in" type="time" style="width:auto" value=${form.time} onInput=${(e) => setForm({ ...form, time: e.target.value })} />`}
+        <option value="once">Once, at…</option><option value="daily">Daily at…</option><option value="weekly">Weekly on…</option><option value="monthly">Monthly on…</option><option value="30">Every 30 min</option><option value="60">Every hour</option><option value="180">Every 3 hours</option><option value="720">Every 12 hours</option></select>
+        ${form.freq === 'weekly' && WEEKDAYS.map((n, d) => html`<button class="btn sm ${form.weekDays.includes(d) ? 'primary' : 'ghost'}" title=${n} onClick=${() => setForm({ ...form, weekDays: form.weekDays.includes(d) ? form.weekDays.filter((x) => x !== d) : [...form.weekDays, d].sort() })}>${n[0]}</button>`)}
+        ${form.freq === 'monthly' && html`<input class="in" style="width:7em" placeholder="1, 15" title="Days of the month, e.g. 1, 15. 31 means the last day of shorter months." value=${form.monthDays} onInput=${(e) => setForm({ ...form, monthDays: e.target.value })} />`}
+        ${['daily', 'weekly', 'monthly'].includes(form.freq) && html`<input class="in" type="time" style="width:auto" value=${form.time} onInput=${(e) => setForm({ ...form, time: e.target.value })} />`}
         ${form.freq === 'once' && html`<input class="in" type="datetime-local" style="width:auto" value=${form.at || ''} onInput=${(e) => setForm({ ...form, at: e.target.value })} />`}
-        <button class="btn primary sm" disabled=${!form.title.trim()} onClick=${save}>Save</button></div>
+        <button class="btn primary sm" disabled=${!form.title.trim() || !daysOk} onClick=${save}>Save</button></div>
     </div>`}
     ${list.map((s) => html`<div class="task" style="cursor:default">
       <div class="row"><div class="t grow">${s.title}</div>

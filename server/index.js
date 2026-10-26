@@ -157,8 +157,7 @@ route('POST', '/api/inbox/clear', () => { state.inbox.forEach((i) => { if (!['ap
 
 route('POST', '/api/schedules', (b) => {
   if (!getWisp(b.wispId)) throw404();
-  const every = b.every?.kind === 'once' && !Number.isNaN(new Date(b.every.at).getTime()) ? { kind: 'once', at: b.every.at } : b.every?.kind === 'daily' ? { kind: 'daily', time: /^\d{1,2}:\d{2}$/.test(b.every.time) ? b.every.time : '08:00' } : { kind: 'interval', minutes: Math.max(15, Number(b.every?.minutes) || 60) };
-  return engine.createSchedule(b.wispId, { title: clamp(b.title, 200) || 'Recurring task', detail: clamp(b.detail, 20000), every });
+  return engine.createSchedule(b.wispId, { title: clamp(b.title, 200) || 'Recurring task', detail: clamp(b.detail, 20000), every: engine.normalizeEvery(b.every) });
 });
 route('PATCH', '/api/schedules/:sid', (b, { sid }) => { const s = state.schedules.find((x) => x.id === sid); if (!s) throw404(); if (b.enabled !== undefined) s.enabled = !!b.enabled; save(); return s; });
 route('DELETE', '/api/schedules/:sid', (b, { sid }) => { state.schedules = state.schedules.filter((x) => x.id !== sid); save(); return { ok: true }; });

@@ -23,7 +23,7 @@ Wisps runs every agent through the Claude Agent SDK using that sign-in.
 | **Background work** | Bigger jobs become tasks that run on their own. The Work tab shows each step live. |
 | **Its own computer** | Each Wisp works in `data/wisps/<id>/computer/`. You can share extra folders in Setup. |
 | **Proactive check-ins** | Every few hours it does read-only research toward its goals, then proposes tasks or pings you. |
-| **Schedules** | One-time ("Oct 1 at 8am") or recurring ("every weekday at 8"), from chat or the Work tab. |
+| **Schedules** | One-time ("Oct 1 at 8am") or recurring ("every weekday at 8", "the 1st and 15th at 9"), from chat or the Work tab. |
 | **Memory** | Learns from 👍/👎 feedback, from what you tell it, and from ideas you dismiss. You can edit it. |
 | **Approvals** | Risky or outward-facing steps (sending, buying, publishing, deleting) wait for your OK, once per action rather than per click. |
 

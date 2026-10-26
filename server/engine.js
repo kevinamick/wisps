@@ -105,11 +105,15 @@ function wispTools(wisp, kind, taskId, origin) {
         const t = createTask(wisp.id, { title, detail, why, source: 'wisp', origin, status: wisp.autonomy === 'autonomous' ? 'queued' : 'proposed' });
         return ok(t.status === 'queued' ? 'Queued (you are autonomous).' : 'Proposed. Awaiting approval.');
       }),
-    tool('schedule_task', 'Schedule work for later. For a one-time job give run_at (local date and time "YYYY-MM-DDTHH:MM", e.g. "2026-10-01T08:00"). For a repeating job give daily_at ("HH:MM", 24h) or every_minutes (>= 15). The task runs in the background at that time, and its result is reported back to this chat.',
-      { title: z.string(), detail: z.string().describe('Full instructions, including everything relevant from the conversation'), run_at: z.string().optional(), every_minutes: z.number().optional(), daily_at: z.string().optional() },
-      async ({ title, detail, run_at, every_minutes, daily_at }) => {
-        const every = run_at ? { kind: 'once', at: run_at } : daily_at ? { kind: 'daily', time: daily_at } : { kind: 'interval', minutes: Math.max(15, every_minutes || 60) };
+    tool('schedule_task', 'Schedule work for later. For a one-time job give run_at (local date and time "YYYY-MM-DDTHH:MM", e.g. "2026-10-01T08:00"). For a repeating job give daily_at ("HH:MM", 24h) or every_minutes (>= 15). To repeat only on certain days, give daily_at plus days_of_month (e.g. [1, 15] for the 1st and 15th; 31 means the last day of shorter months) or days_of_week (0=Sunday … 6=Saturday, e.g. [1,2,3,4,5] for weekdays). Never schedule daily and check the date inside the task. The task runs in the background at that time, and its result is reported back to this chat.',
+      { title: z.string(), detail: z.string().describe('Full instructions, including everything relevant from the conversation'), run_at: z.string().optional(), every_minutes: z.number().optional(), daily_at: z.string().optional(),
+        days_of_month: z.array(z.number().int().min(1).max(31)).optional(), days_of_week: z.array(z.number().int().min(0).max(6)).optional() },
+      async ({ title, detail, run_at, every_minutes, daily_at, days_of_month, days_of_week }) => {
         if (run_at && Number.isNaN(new Date(run_at).getTime())) return ok('run_at must look like 2026-10-01T08:00.');
+        const every = normalizeEvery(run_at ? { kind: 'once', at: run_at }
+          : days_of_month?.length ? { kind: 'monthly', days: days_of_month, time: daily_at }
+          : days_of_week?.length ? { kind: 'weekly', days: days_of_week, time: daily_at }
+          : daily_at ? { kind: 'daily', time: daily_at } : { kind: 'interval', minutes: every_minutes });
         const s = createSchedule(wisp.id, { title, detail, every, origin });
         return ok(`Scheduled. Next run ${new Date(s.nextAt).toLocaleString()}.`);
       }),
@@ -497,14 +501,32 @@ export function recoverAfterRestart() {
 }
 
 // ---- scheduling helpers ----------------------------------------------------
+// Cleans up an `every` from the app or a Wisp. Kinds: once {at}, daily {time}, weekly {days: 0=Sun..6=Sat, time},
+// monthly {days: 1..31, time}, interval {minutes}. A monthly day past the end of a short month runs on its last day.
+export function normalizeEvery(e = {}) {
+  const time = /^\d{1,2}:\d{2}$/.test(e.time) ? e.time : '08:00';
+  const days = (lo, hi) => [...new Set((Array.isArray(e.days) ? e.days : []).map(Number).filter((n) => Number.isInteger(n) && n >= lo && n <= hi))].sort((a, b) => a - b);
+  if (e.kind === 'once' && !Number.isNaN(new Date(e.at).getTime())) return { kind: 'once', at: e.at };
+  if (e.kind === 'weekly' && days(0, 6).length) return { kind: 'weekly', days: days(0, 6), time };
+  if (e.kind === 'monthly' && days(1, 31).length) return { kind: 'monthly', days: days(1, 31), time };
+  if (e.kind === 'daily') return { kind: 'daily', time };
+  return { kind: 'interval', minutes: Math.max(15, Number(e.minutes) || 60) };
+}
+
 export function nextRun(every, from = new Date()) {
   if (every.kind === 'once') { const at = new Date(every.at); return (at > from ? at : new Date(from.getTime() + 60e3)).toISOString(); }
-  if (every.kind === 'daily') {
+  if (['daily', 'weekly', 'monthly'].includes(every.kind)) {
     const [h, m] = String(every.time || '08:00').split(':').map(Number);
+    const fits = (d) => {
+      if (every.kind === 'weekly') return every.days.includes(d.getDay());
+      if (every.kind === 'monthly') { const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); return every.days.some((n) => Math.min(n, last) === d.getDate()); }
+      return true;
+    };
     const d = new Date(from);
-    d.setHours(h, m || 0, 0, 0);
-    if (d <= from) d.setDate(d.getDate() + 1);
-    return d.toISOString();
+    for (let i = 0; i < 62; i++, d.setDate(d.getDate() + 1)) {
+      d.setHours(h, m || 0, 0, 0);
+      if (d > from && fits(d)) return d.toISOString();
+    }
   }
   return new Date(from.getTime() + Math.max(15, every.minutes || 60) * 60000).toISOString();
 }
